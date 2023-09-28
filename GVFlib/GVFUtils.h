@@ -71,7 +71,7 @@ typedef struct
 //--------------------------------------------------------------
 // init matrix by allocating memory
 template <typename T>
-inline void initMat(vector< vector<T> > & M, int rows, int cols){
+inline void initMat(vector< vector<T> > & M, int rows, int cols) throw() {
     M.resize(rows);
     for (int n=0; n<rows; n++){
         M[n].resize(cols);
@@ -82,8 +82,8 @@ inline void initMat(vector< vector<T> > & M, int rows, int cols){
 // init matrix and copy values from another matrix
 template <typename T>
 inline void setMat(vector< vector<T> > & C, vector< vector<float> > & M){
-    int rows = M.size();
-    int cols = M[0].size();
+    int rows = (int)M.size();
+    int cols = (int)M[0].size();
     //C.resize(rows);
     C = vector<vector<T> >(rows);
     for (int n=0; n<rows; n++){
@@ -143,7 +143,7 @@ inline void printVec(vector<T> & V){
 
 //--------------------------------------------------------------
 template <typename T>
-inline void initVec(vector<T> & V, int rows){
+inline void initVec(vector<T> & V, int rows) throw() {
     V.resize(rows);
 }
 
@@ -269,10 +269,12 @@ inline vector<vector<float> > getRotationMatrix3d(T phi, T theta, T psi)
 template <typename T>
 float distance_weightedEuclidean(vector<T> x, vector<T> y, vector<T> w)
 {
-    int count = x.size();
-    if (count <= 0) return 0;
+  //k < x,y,w size to avoid crash (Riccardo)
+    int countx = (int)x.size();
+    int county = (int)y.size();
+    int countw = (int)w.size();
     float dist = 0.0;
-    for(int k = 0; k < count; k++) dist += w[k] * pow((x[k] - y[k]), 2);
+    for(int k = 0; k < countx && k < county && k < countw; k++) dist += w[k] * pow((x[k] - y[k]), 2);
     return dist;
 }
 

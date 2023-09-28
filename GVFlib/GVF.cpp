@@ -154,7 +154,6 @@ void GVF::clear()
 {
     state = STATE_CLEAR;
     gestureTemplates.clear();
-    activeGestures.clear(); //ISMM
     mostProbableIndex = -1;
 }
 
@@ -195,8 +194,7 @@ void GVF::addGestureTemplate(GVFGesture & gestureTemplate)
     gestureTemplates.push_back(gestureTemplate);
     activeGestures.push_back(gestureTemplates.size());
     
-    //if(minRange.size() == 0){
-    if((minRange.size() == 0) || (minRange.size() != inputDimension)){ //ISMM
+    if(minRange.size() == 0){
         minRange.resize(inputDimension);
         maxRange.resize(inputDimension);
     }
@@ -314,6 +312,7 @@ void GVF::train(){
         else rotationsDim=0;
         
         // Init state space
+      try {
         initVec(classes, parameters.numberParticles);                           // Vector of gesture class
         initVec(alignment, parameters.numberParticles);                         // Vector of phase values (alignment)
         initMat(dynamics, parameters.numberParticles, dynamicsDim);             // Matric of dynamics
@@ -329,7 +328,13 @@ void GVF::train(){
         initVec(prior, parameters.numberParticles);
         initVec(posterior, parameters.numberParticles);
         initVec(likelihood, parameters.numberParticles);
-        
+      } catch (std::exception &ex) {
+        printf("memory error in train %s\n", ex.what());
+        return;
+      } catch (...) {
+        printf("memory error in train\n");
+        return;
+      }
         
         initPrior();            // prior on init state values
         initNoiseParameters();  // init noise parameters (transition and likelihood)
@@ -387,12 +392,14 @@ void GVF::initPrior() //int pf_n)
     
     
     // dynamics
-    dynamics[pf_n][0] = ((*rndunif)(unifgen) - 0.5) * parameters.dynamicsSpreadingRange + parameters.dynamicsSpreadingCenter; // spread speed
-    if (dynamics[pf_n].size()>1)
+    if (dynamics[pf_n].size()>0)
     {
+      dynamics[pf_n][0] = ((*rndunif)(unifgen) - 0.5) * parameters.dynamicsSpreadingRange + parameters.dynamicsSpreadingCenter; // spread speed
+      if (dynamics[pf_n].size()>1)
+      {
         dynamics[pf_n][1] = ((*rndunif)(unifgen) - 0.5) * parameters.dynamicsSpreadingRange; // spread accel
+      }
     }
-    
     // scalings
     for(int l = 0; l < scalings[pf_n].size(); l++) {
         scalings[pf_n][l] = ((*rndunif)(unifgen) - 0.5) * parameters.scalingsSpreadingRange + parameters.scalingsSpreadingCenter; // spread scalings
@@ -629,18 +636,22 @@ void GVF::restart()
 #pragma mark - PARTICLE FILTERING
 
 //--------------------------------------------------------------
-void GVF::updatePrior(int n) {
-    
-    // Update alignment / dynamics / scalings
-    float L = gestureTemplates[classes[n]].getTemplateLength();
+void GVF::updatePrior(int n)
+{
+  // Update alignment / dynamics / scalings
+  if(getNumberOfGestureTemplates()>0)
+  {
+    int classIndex = classes[n];
+    if(classIndex >= gestureTemplates.size()) classIndex = gestureTemplates.size()-1; // index clipped to avoid crash (Riccardo)
+    float L = gestureTemplates[classIndex].getTemplateLength();
     alignment[n] += (*rndnorm)(normgen) * parameters.alignmentVariance + dynamics[n][0]/L; // + dynamics[n][1]/(L*L);
     
     if (dynamics[n].size()>1){
-        dynamics[n][0] += (*rndnorm)(normgen) * parameters.dynamicsVariance[0] + dynamics[n][1]/L;
-        dynamics[n][1] += (*rndnorm)(normgen) * parameters.dynamicsVariance[1];
+      dynamics[n][0] += (*rndnorm)(normgen) * parameters.dynamicsVariance[0] + dynamics[n][1]/L;
+      dynamics[n][1] += (*rndnorm)(normgen) * parameters.dynamicsVariance[1];
     }
     else {
-        dynamics[n][0] += (*rndnorm)(normgen) * parameters.dynamicsVariance[0];
+      dynamics[n][0] += (*rndnorm)(normgen) * parameters.dynamicsVariance[0];
     }
     
     //    for(int l= 0; l < dynamics[n].size(); l++)  dynamics[n][l] += (*rndnorm)(normgen) * parameters.dynamicsVariance[l];
@@ -649,6 +660,7 @@ void GVF::updatePrior(int n) {
     
     // update prior (bayesian incremental inference)
     prior[n] = posterior[n];
+  }
 }
 
 //--------------------------------------------------------------
@@ -690,50 +702,58 @@ void GVF::updateLikelihood(vector<float> obs, int n)
         }
     }
     
-    vector<float> vobs(config.inputDimensions);
-    setVec(vobs, obs);
+  vector<float> vobs(config.inputDimensions);
+  setVec(vobs, obs);
     
-    if (config.translate)
-        for (int j=0; j < config.inputDimensions; j++)
-            vobs[j] = vobs[j] - offsets[n][j];
+  if (config.translate)
+      for (int j=0; j < config.inputDimensions; j++)
+          vobs[j] = vobs[j] - offsets[n][j];
+  
     
-    
-    // take vref from template at the given alignment
-    int gestureIndex = classes[n];
-    float cursor = alignment[n];
+  // take vref from template at the given alignment
+  int gestureIndex = classes[n];
+  float cursor = alignment[n];
+  if(gestureIndex < getNumberOfGestureTemplates())
+  {
     int frameindex = min((int)(gestureTemplates[gestureIndex].getTemplateLength() - 1),
                          (int)(floor(cursor * gestureTemplates[gestureIndex].getTemplateLength() ) ) );
-//    return gestureTemplates[gestureIndex].getTemplate()[frameindex];
-    vector<float> vref = gestureTemplates[gestureIndex].getTemplate()[frameindex];; //getGestureTemplateSample(classes[n], alignment[n]);
-    
-    // Apply scaling coefficients
-    for (int k=0;k < config.inputDimensions; k++)
+    //    return gestureTemplates[gestureIndex].getTemplate()[frameindex];
+    if(frameindex >= 0) // check frameindex >= zero to avoid crash (Riccardo)
     {
-//        if (config.normalization) vref[k] = vref[k] / globalNormalizationFactor;
-        vref[k] *= scalings[n][k];
-    }
+      vector<float> vref = gestureTemplates[gestureIndex].getTemplate()[frameindex]; //getGestureTemplateSample(classes[n], alignment[n]);
+      if(vref.size() > 0) // check vref size to avoid crash (Riccardo)
+      {
+        // Apply scaling coefficients
+        for (int k=0;k < config.inputDimensions && k < vref.size(); k++)
+        {
+          //        if (config.normalization) vref[k] = vref[k] / globalNormalizationFactor;
+          vref[k] *= scalings[n][k];
+        }
     
-    // Apply rotation coefficients
-    if (config.inputDimensions==2) {
-        float tmp0=vref[0]; float tmp1=vref[1];
-        vref[0] = cos(rotations[n][0])*tmp0 - sin(rotations[n][0])*tmp1;
-        vref[1] = sin(rotations[n][0])*tmp0 + cos(rotations[n][0])*tmp1;
-    }
-    else if (config.inputDimensions==3) {
-        // Rotate template sample according to the estimated angles of rotations (3d)
-        vector<vector< float> > RotMatrix = getRotationMatrix3d(rotations[n][0],rotations[n][1],rotations[n][2]);
-        vref = multiplyMat(RotMatrix, vref);
-    }
+        // Apply rotation coefficients
+        if (config.inputDimensions==2) {
+          float tmp0=vref[0]; float tmp1=vref[1];
+          vref[0] = cos(rotations[n][0])*tmp0 - sin(rotations[n][0])*tmp1;
+          vref[1] = sin(rotations[n][0])*tmp0 + cos(rotations[n][0])*tmp1;
+        }
+        else if (config.inputDimensions==3) {
+          // Rotate template sample according to the estimated angles of rotations (3d)
+          vector<vector< float> > RotMatrix = getRotationMatrix3d(rotations[n][0],rotations[n][1],rotations[n][2]);
+          vref = multiplyMat(RotMatrix, vref);
+        }
     
-    // weighted euclidean distance
-    float dist = distance_weightedEuclidean(vref,vobs,parameters.dimWeights);
-    
-    if(parameters.distribution == 0.0f){    // Gaussian distribution
-        likelihood[n] = exp(- dist * 1 / (parameters.tolerance * parameters.tolerance));
+        // weighted euclidean distance
+        float dist = distance_weightedEuclidean(vref,vobs,parameters.dimWeights);
+        
+        if(parameters.distribution == 0.0f){    // Gaussian distribution
+          likelihood[n] = exp(- dist * 1 / (parameters.tolerance * parameters.tolerance));
+        }
+        else {            // Student's distribution
+          likelihood[n] = pow(dist/parameters.distribution + 1, -parameters.distribution/2 - 1);    // dimension is 2 .. pay attention if editing]
+        }
+      }
     }
-    else {            // Student's distribution
-        likelihood[n] = pow(dist/parameters.distribution + 1, -parameters.distribution/2 - 1);    // dimension is 2 .. pay attention if editing]
-    }
+  }
 //    // if log on keep track on vref and vobs
 //    if (config.logOn){
 //        vecRef.push_back(vref);
@@ -849,107 +869,112 @@ void GVF::resampleAccordingToWeights(vector<float> obs)
 
 
 //--------------------------------------------------------------
-void GVF::estimates(){
+void GVF::estimates()
+{
+  if(getNumberOfGestureTemplates() <= 0) return;
+  
+  int numOfPart = parameters.numberParticles;
+  vector<float> probabilityNormalisation(getNumberOfGestureTemplates());
+  setVec(probabilityNormalisation, 0.0f, getNumberOfGestureTemplates());            // rows are gestures
+  setVec(estimatedAlignment, 0.0f, getNumberOfGestureTemplates());            // rows are gestures
+  setMat(estimatedDynamics,  0.0f, getNumberOfGestureTemplates(), dynamicsDim);  // rows are gestures, cols are features + probabilities
+  setMat(estimatedScalings,  0.0f, getNumberOfGestureTemplates(), scalingsDim);   // rows are gestures, cols are features + probabilities
+  if (rotationsDim!=0) setMat(estimatedRotations,  0.0f, getNumberOfGestureTemplates(), rotationsDim);   // ..
+  setVec(estimatedProbabilities, 0.0f, getNumberOfGestureTemplates());            // rows are gestures
+  setVec(estimatedLikelihoods, 0.0f, getNumberOfGestureTemplates());            // rows are gestures
+  
+  //    float sumposterior = 0.;
     
+  for(int n = 0; n < numOfPart; n++)
+  {
+    probabilityNormalisation[classes[n]] += posterior[n];
+  }
+  
     
-    int numOfPart = parameters.numberParticles;
-    vector<float> probabilityNormalisation(getNumberOfGestureTemplates());
-    setVec(probabilityNormalisation, 0.0f, getNumberOfGestureTemplates());            // rows are gestures
-    setVec(estimatedAlignment, 0.0f, getNumberOfGestureTemplates());            // rows are gestures
-    setMat(estimatedDynamics,  0.0f, getNumberOfGestureTemplates(), dynamicsDim);  // rows are gestures, cols are features + probabilities
-    setMat(estimatedScalings,  0.0f, getNumberOfGestureTemplates(), scalingsDim);   // rows are gestures, cols are features + probabilities
-    if (rotationsDim!=0) setMat(estimatedRotations,  0.0f, getNumberOfGestureTemplates(), rotationsDim);   // ..
-    setVec(estimatedProbabilities, 0.0f, getNumberOfGestureTemplates());            // rows are gestures
-    setVec(estimatedLikelihoods, 0.0f, getNumberOfGestureTemplates());            // rows are gestures
-    
-    //    float sumposterior = 0.;
-    
-    for(int n = 0; n < numOfPart; n++)
+  // compute the estimated features and likelihoods
+  for(int n = 0; n < numOfPart; n++)
+  {
+    int classIndex = classes[n];
+    if(classIndex < getNumberOfGestureTemplates())
     {
-        probabilityNormalisation[classes[n]] += posterior[n];
+      //        sumposterior += posterior[n];
+      estimatedAlignment[classIndex] += alignment[n] * posterior[n];
+      
+      for(int m = 0; m < dynamicsDim; m++)
+        estimatedDynamics[classIndex][m] += dynamics[n][m] * (posterior[n]/probabilityNormalisation[classIndex]);
+      
+      for(int m = 0; m < scalingsDim; m++)
+        estimatedScalings[classIndex][m] += scalings[n][m] * (posterior[n]/probabilityNormalisation[classIndex]);
+      
+      if (rotationsDim!=0)
+        for(int m = 0; m < rotationsDim; m++)
+          estimatedRotations[classIndex][m] += rotations[n][m] * (posterior[n]/probabilityNormalisation[classIndex]);
+      
+      if (!isnan(posterior[n]))
+        estimatedProbabilities[classIndex] += posterior[n];
+      estimatedLikelihoods[classIndex] += likelihood[n];
     }
+  }
+    
+  // calculate most probable index during scaling...
+  float maxProbability = 0.0f;
+  mostProbableIndex = -1;
+  
+  for(int gi = 0; gi < getNumberOfGestureTemplates(); gi++)
+  {
+    if(estimatedProbabilities[gi] > maxProbability){
+      maxProbability      = estimatedProbabilities[gi];
+      mostProbableIndex   = gi;
+    }
+  }
+  //    std::cout << estimatedProbabilities[0] << " " << estimatedProbabilities[1] << std::endl;
+    
+  //    outcomes.estimations.clear();
+  outcomes.likelihoods.clear();
+  outcomes.alignments.clear();
+  outcomes.scalings.clear();
+  outcomes.dynamics.clear();
+  outcomes.rotations.clear();
+  
+  // most probable gesture index
+  outcomes.likeliestGesture = mostProbableIndex;
+  
+  // Fill estimation for each gesture
+  for (int gi = 0; gi < gestureTemplates.size(); ++gi)
+  {
+    
+    //        GVFEstimation estimation;
+    outcomes.likelihoods.push_back(estimatedProbabilities[gi]);
+    outcomes.alignments.push_back(estimatedAlignment[gi]);
+    //        estimation.probability = estimatedProbabilities[gi];
+    //        estimation.alignment   = estimatedAlignment[gi];
     
     
-    // compute the estimated features and likelihoods
-    for(int n = 0; n < numOfPart; n++)
+    vector<float> gDynamics(dynamicsDim, 0.0);
+    for (int j = 0; j < dynamicsDim; ++j) gDynamics[j] = estimatedDynamics[gi][j];
+    outcomes.dynamics.push_back(gDynamics);
+    
+    vector<float> gScalings(scalingsDim, 0.0);
+    for (int j = 0; j < scalingsDim; ++j) gScalings[j] = estimatedScalings[gi][j];
+    outcomes.scalings.push_back(gScalings);
+        
+    vector<float> gRotations;
+    if (rotationsDim!=0)
     {
-        
-        //        sumposterior += posterior[n];
-        estimatedAlignment[classes[n]] += alignment[n] * posterior[n];
-        
-        for(int m = 0; m < dynamicsDim; m++)
-            estimatedDynamics[classes[n]][m] += dynamics[n][m] * (posterior[n]/probabilityNormalisation[classes[n]]);
-        
-        for(int m = 0; m < scalingsDim; m++)
-            estimatedScalings[classes[n]][m] += scalings[n][m] * (posterior[n]/probabilityNormalisation[classes[n]]);
-        
-        if (rotationsDim!=0)
-            for(int m = 0; m < rotationsDim; m++)
-                estimatedRotations[classes[n]][m] += rotations[n][m] * (posterior[n]/probabilityNormalisation[classes[n]]);
-        
-        if (!isnan(posterior[n]))
-            estimatedProbabilities[classes[n]] += posterior[n];
-        estimatedLikelihoods[classes[n]] += likelihood[n];
+      gRotations.resize(rotationsDim);
+      for (int j = 0; j < rotationsDim; ++j) gRotations[j] = estimatedRotations[gi][j];
+      outcomes.rotations.push_back(gRotations);
     }
     
-    // calculate most probable index during scaling...
-    float maxProbability = 0.0f;
-    mostProbableIndex = -1;
+    //        estimation.likelihood = estimatedLikelihoods[gi];
     
-    for(int gi = 0; gi < getNumberOfGestureTemplates(); gi++)
-    {
-        if(estimatedProbabilities[gi] > maxProbability){
-            maxProbability      = estimatedProbabilities[gi];
-            mostProbableIndex   = gi;
-        }
-    }
-    //    std::cout << estimatedProbabilities[0] << " " << estimatedProbabilities[1] << std::endl;
-    
-    //    outcomes.estimations.clear();
-    outcomes.likelihoods.clear();
-    outcomes.alignments.clear();
-    outcomes.scalings.clear();
-    outcomes.dynamics.clear();
-    outcomes.rotations.clear();
-    
-    // most probable gesture index
-    outcomes.likeliestGesture = mostProbableIndex;
-    
-    // Fill estimation for each gesture
-    for (int gi = 0; gi < gestureTemplates.size(); ++gi) {
-        
-        //        GVFEstimation estimation;
-        outcomes.likelihoods.push_back(estimatedProbabilities[gi]);
-        outcomes.alignments.push_back(estimatedAlignment[gi]);
-        //        estimation.probability = estimatedProbabilities[gi];
-        //        estimation.alignment   = estimatedAlignment[gi];
-        
-        
-        vector<float> gDynamics(dynamicsDim, 0.0);
-        for (int j = 0; j < dynamicsDim; ++j) gDynamics[j] = estimatedDynamics[gi][j];
-        outcomes.dynamics.push_back(gDynamics);
-        
-        vector<float> gScalings(scalingsDim, 0.0);
-        for (int j = 0; j < scalingsDim; ++j) gScalings[j] = estimatedScalings[gi][j];
-        outcomes.scalings.push_back(gScalings);
-        
-        vector<float> gRotations;
-        if (rotationsDim!=0)
-        {
-            gRotations.resize(rotationsDim);
-            for (int j = 0; j < rotationsDim; ++j) gRotations[j] = estimatedRotations[gi][j];
-            outcomes.rotations.push_back(gRotations);
-        }
-        
-        //        estimation.likelihood = estimatedLikelihoods[gi];
-        
-        // push estimation for gesture gi in outcomes
-        //        outcomes.estimations.push_back(estimation);
-    }
-    
-    
-    //    assert(outcomes.estimations.size() == gestureTemplates.size());
-    
+    // push estimation for gesture gi in outcomes
+    //        outcomes.estimations.push_back(estimation);
+  }
+  
+  
+  //    assert(outcomes.estimations.size() == gestureTemplates.size());
+  
 }
 
 ////--------------------------------------------------------------
