@@ -887,7 +887,9 @@ void GVF::estimates()
     
   for(int n = 0; n < numOfPart; n++)
   {
-    probabilityNormalisation[classes[n]] += posterior[n];
+    int classIndex = classes[n];
+    if(classIndex < getNumberOfGestureTemplates())
+      probabilityNormalisation[classes[n]] += posterior[n];
   }
   
     
